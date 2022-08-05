@@ -45,9 +45,14 @@ using UdonSharp;
 // ReSharper disable MemberCanBeMadeStatic.Global
 // ReSharper disable SuggestBaseTypeForParameter
 // ReSharper disable once InconsistentNaming
-// ReSharper disable once CheckNamespace
 public class UdonXML : UdonSharpBehaviour
 {
+    [SerializeField]
+    int ParseLimit = 50;
+
+    [SerializeField]
+    UdonXMLAsyncRunner AsyncRunner;
+
     /**
      * Data is stored internally in the following format:
      *
@@ -202,36 +207,69 @@ public class UdonXML : UdonSharpBehaviour
         // [ 1, 0, 1]
         while (position.Length != 0)
         {
-            current = (object[]) ((object[]) current[2])[position[0]];
+            current = (object[])((object[])current[2])[position[0]];
             position = RemoveFirstIntegerArray(position);
         }
 
         return current;
     }
 
-    private object[] Parse(char[] input)
+    private object[] InitStateObject()
     {
-        var state = 0;
-        var level = 0;
-        var isSpecialData = false;
-        var isWithinQuotes = false;
-        var isSelfClosingNode = false;
-        var hasNodeNameEnded = false;
-        var hasTagSplitOccured = false; // means the = between the name and the value
+        var stateObject = new object[14];
+        stateObject[0] = 0;
+        stateObject[1] = 0;
+        stateObject[2] = false;
+        stateObject[3] = false;
+        stateObject[4] = false;
+        stateObject[5] = false;
+        stateObject[6] = false;
 
         var data = GenerateEmptyStruct();
         data[0] = "UdonXMLRoot";
+        stateObject[7] = data;
 
         // Position to know where we are in the tree.
-        var position = new int[0];
+        stateObject[8] = new int[0];
 
-        var nodeName = "";
-        var tagName = "";
-        var tagValue = "";
-        var tagNames = new string[0];
-        var tagValues = new string[0];
+        stateObject[9] = "";
+        stateObject[10] = "";
+        stateObject[11] = "";
+        stateObject[12] = new string[0];
+        stateObject[13] = new string[0];
 
-        for (var i = 0; i != input.Length; i++)
+        return stateObject;
+    }
+
+    public object[] Parse(bool isAsync, char[] input, object[] stateObject, int currentProgress)
+    {
+        if (stateObject == null)
+        {
+            stateObject = InitStateObject();
+        }
+
+        var state = (int)stateObject[0];
+        var level = (int)stateObject[1];
+        var isSpecialData = (bool)stateObject[2];
+        var isWithinQuotes = (bool)stateObject[3];
+        var isSelfClosingNode = (bool)stateObject[4];
+        var hasNodeNameEnded = (bool)stateObject[5];
+        var hasTagSplitOccured = (bool)stateObject[6]; // means the = between the name and the value
+
+        var data = (object[])stateObject[7];
+
+        // Position to know where we are in the tree.
+        var position = (int[])stateObject[8];
+
+        var nodeName = (string)stateObject[9];
+        var tagName = (string)stateObject[10];
+        var tagValue = (string)stateObject[11];
+        var tagNames = (string[])stateObject[12];
+        var tagValues = (string[])stateObject[13];
+
+        var stoppingPoint = (isAsync) ? Mathf.Min(currentProgress + ParseLimit, input.Length) : input.Length;
+
+        for (var i = currentProgress; i < stoppingPoint; i++)
         {
             char c = input[i];
             string pos = "";
@@ -241,7 +279,7 @@ public class UdonXML : UdonSharpBehaviour
             }
 
 #if DEBUG
-            Debug.Log(state + " " + level + " " + c + "   " + pos);
+            //Debug.Log(state + " " + level + " " + c + "   " + pos);
 #endif
 
             if (state == 0)
@@ -261,7 +299,7 @@ public class UdonXML : UdonSharpBehaviour
                 else
                 {
                     object[] s = FindCurrentLevel(data, position);
-                    s[3] = (string) s[3] + c;
+                    s[3] = (string)s[3] + c;
                 }
             }
             else if (state == 1)
@@ -290,7 +328,7 @@ public class UdonXML : UdonSharpBehaviour
 
                     state = 0;
 #if DEBUG
-                    Debug.Log("CLOSED TAG : " + nodeName);
+                    //Debug.Log("CLOSED TAG : " + nodeName);
 #endif
                 }
                 else
@@ -303,21 +341,21 @@ public class UdonXML : UdonSharpBehaviour
                 if (c == '>' && !isWithinQuotes)
                 {
 #if DEBUG
-                    Debug.Log("OPENED TAG : " + nodeName);
+                    //Debug.Log("OPENED TAG : " + nodeName);
 #endif
                     state = 0;
                     tagName = "";
                     tagValue = "";
 
                     var s = FindCurrentLevel(data, position);
-                    position = AddLastToIntegerArray(position, ((object[]) s[2]).Length);
+                    position = AddLastToIntegerArray(position, ((object[])s[2]).Length);
 
-                    s[2] = AddLastToObjectArray((object[]) s[2], GenerateEmptyStruct());
-                    var children = (object[]) s[2];
-                    var child = (object[]) children[children.Length - 1];
+                    s[2] = AddLastToObjectArray((object[])s[2], GenerateEmptyStruct());
+                    var children = (object[])s[2];
+                    var child = (object[])children[children.Length - 1];
 
                     child[0] = nodeName;
-                    var attr = (object[]) child[1];
+                    var attr = (object[])child[1];
                     attr[0] = tagNames;
                     attr[1] = tagValues;
 
@@ -325,7 +363,7 @@ public class UdonXML : UdonSharpBehaviour
                     {
                         position = RemoveLastIntegerArray(position);
 #if DEBUG
-                        Debug.Log("SELF-CLOSED TAG : " + nodeName);
+                        //Debug.Log("SELF-CLOSED TAG : " + nodeName);
 #endif
                     }
 
@@ -411,9 +449,41 @@ public class UdonXML : UdonSharpBehaviour
         }
 
 #if DEBUG
-        Debug.Log("Level after parsing: " + level);
+        //Debug.Log("Level after parsing: " + level);
 #endif
-        return level != 0 ? null : data;
+
+        if (stoppingPoint != input.Length)
+        {
+            // Save state
+            stateObject[0] = state;
+            stateObject[1] = level;
+            stateObject[2] = isSpecialData;
+            stateObject[3] = isWithinQuotes;
+            stateObject[4] = isSelfClosingNode;
+            stateObject[5] = hasNodeNameEnded;
+            stateObject[6] = hasTagSplitOccured;
+
+            stateObject[7] = data;
+
+            // Position to know where we are in the tree.
+            stateObject[8] = position;
+
+            stateObject[9] = nodeName;
+            stateObject[10] = tagName;
+            stateObject[11] = tagValue;
+            stateObject[12] = tagNames;
+            stateObject[13] = tagValues;
+
+            AsyncRunner._SaveStates(stateObject, stoppingPoint);
+
+            return null;
+        }
+        else
+        {
+            AsyncRunner._SaveStates(null, stoppingPoint);
+
+            return level != 0 ? null : data;
+        }
     }
 
     private string Serialize(object[] data, string padding)
@@ -423,25 +493,25 @@ public class UdonXML : UdonSharpBehaviour
         var work = new object[0];
         var current = data;
 
-        var nodeChildren = (object[]) current[2];
+        var nodeChildren = (object[])current[2];
         // Add all current children
         foreach (object o in nodeChildren)
         {
-            work = AddLastToObjectArray(work, new[] {o, 0});
+            work = AddLastToObjectArray(work, new[] { o, 0 });
         }
 
         while (work.Length != 0)
         {
-            current = (object[]) work[0];
-            var node = (object[]) current[0];
-            var level = (int) current[1];
+            current = (object[])work[0];
+            var node = (object[])current[0];
+            var level = (int)current[1];
             work = RemoveFirstObjectArray(work);
-            var nodeName = (string) node[0];
-            var nodeTags = (object[]) node[1];
-            var tagNames = (object[]) nodeTags[0];
-            var tagValues = (object[]) nodeTags[1];
-            nodeChildren = (object[]) node[2];
-            var nodeValue = (string) node[3];
+            var nodeName = (string)node[0];
+            var nodeTags = (object[])node[1];
+            var tagNames = (object[])nodeTags[0];
+            var tagValues = (object[])nodeTags[1];
+            nodeChildren = (object[])node[2];
+            var nodeValue = (string)node[3];
 #if DEBUG
             Debug.Log("[UdonXML] [Save] Work: " + nodeName + " " + level);
 #endif
@@ -508,8 +578,8 @@ public class UdonXML : UdonSharpBehaviour
                 {
                     var tempData = GenerateEmptyStruct();
                     tempData[0] = "/" + nodeName;
-                    tempData[2] = new object[] {null};
-                    work = AddFirstToObjectArray(work, (object) new object[] {tempData, level});
+                    tempData[2] = new object[] { null };
+                    work = AddFirstToObjectArray(work, new object[] { tempData, level });
                 }
             }
 
@@ -519,7 +589,7 @@ public class UdonXML : UdonSharpBehaviour
                 var o = nodeChildren[i];
                 if (o != null)
                 {
-                    work = AddFirstToObjectArray(work, new [] {o, level + 1});
+                    work = AddFirstToObjectArray(work, new[] { o, level + 1 });
                 }
             }
         }
@@ -534,7 +604,28 @@ public class UdonXML : UdonSharpBehaviour
      */
     public object LoadXml(string input)
     {
-        return Parse(input.ToCharArray());
+        return Parse(false, input.ToCharArray(), null, 0);
+    }
+
+    public bool _LoadXmlAsync(string input, UdonSharpBehaviour callbackBehaviour, string callbackFunctionName, string progressCallbackFunctionName)
+    {
+        // Only one async operation may run at once
+        if (AsyncRunner.gameObject.activeInHierarchy)
+            return false;
+
+        AsyncRunner.gameObject.SetActive(true);
+        AsyncRunner._InitAsync(input, callbackBehaviour, callbackFunctionName, progressCallbackFunctionName);
+        return true;
+    }
+
+    public float FetchAsyncProgress()
+    {
+        return AsyncRunner._GetCurrentProgressPC();
+    }
+
+    public object[] FetchAsyncResult()
+    {
+        return AsyncRunner.ResultObject;
     }
 
     /**
@@ -551,7 +642,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public string SaveXmlWithIdent(object data, string indent)
     {
-        return Serialize((object[]) data, indent);
+        return Serialize((object[])data, indent);
     }
 
     /**
@@ -559,7 +650,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public bool HasChildNodes(object data)
     {
-        return ((object[]) ((object[]) data)[2]).Length != 0;
+        return ((object[])((object[])data)[2]).Length != 0;
     }
 
     /**
@@ -567,7 +658,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public int GetChildNodesCount(object data)
     {
-        return ((object[]) ((object[]) data)[2]).Length;
+        return ((object[])((object[])data)[2]).Length;
     }
 
     /**
@@ -575,7 +666,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public object GetChildNode(object data, int index)
     {
-        return (object[]) ((object[]) ((object[]) data)[2])[index];
+        return (object[])((object[])((object[])data)[2])[index];
     }
 
     /**
@@ -585,12 +676,12 @@ public class UdonXML : UdonSharpBehaviour
      */
     public object GetChildNodeByName(object data, string nodeName)
     {
-        var children = (object[]) ((object[]) data)[2];
+        var children = (object[])((object[])data)[2];
 
         for (var i = 0; i != children.Length; i++)
         {
-            var child = (object[]) children[i];
-            if (((string) child[0]) == nodeName)
+            var child = (object[])children[i];
+            if (((string)child[0]) == nodeName)
             {
                 return child;
             }
@@ -608,8 +699,8 @@ public class UdonXML : UdonSharpBehaviour
     {
         var newChild = GenerateEmptyStruct();
         newChild[0] = nodeName;
-        var d = (object[]) data;
-        d[2] = AddLastToObjectArray((object[]) d[2], newChild);
+        var d = (object[])data;
+        d[2] = AddLastToObjectArray((object[])d[2], newChild);
         return newChild;
     }
 
@@ -620,9 +711,9 @@ public class UdonXML : UdonSharpBehaviour
      */
     public object RemoveChildNode(object data, int index)
     {
-        var d = (object[]) data;
-        var old = ((object[]) d[2])[index];
-        d[2] = RemoveIndexObjectArray((object[]) d[2], index);
+        var d = (object[])data;
+        var old = ((object[])d[2])[index];
+        d[2] = RemoveIndexObjectArray((object[])d[2], index);
         return old;
     }
 
@@ -633,12 +724,12 @@ public class UdonXML : UdonSharpBehaviour
      */
     public object RemoveChildNodeByName(object data, string nodeName)
     {
-        var d = (object[]) data;
-        var children = (object[]) d[2];
+        var d = (object[])data;
+        var children = (object[])d[2];
         for (var i = 0; i != children.Length; i++)
         {
-            var old = (object[]) children[i];
-            if ((string) old[0] == nodeName)
+            var old = (object[])children[i];
+            if ((string)old[0] == nodeName)
             {
                 d[2] = RemoveIndexObjectArray(children, i);
                 return old;
@@ -653,7 +744,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public string GetNodeName(object data)
     {
-        return (string) ((object[]) data)[0];
+        return (string)((object[])data)[0];
     }
 
     /**
@@ -661,7 +752,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public void SetNodeName(object data, string newName)
     {
-        ((object[]) data)[0] = newName;
+        ((object[])data)[0] = newName;
     }
 
     /**
@@ -669,7 +760,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public string GetNodeValue(object data)
     {
-        return (string) ((object[]) data)[3];
+        return (string)((object[])data)[3];
     }
 
     /**
@@ -677,7 +768,7 @@ public class UdonXML : UdonSharpBehaviour
      */
     public void SetNodeValue(object data, string newValue)
     {
-        ((object[]) data)[3] = newValue;
+        ((object[])data)[3] = newValue;
     }
 
     /**
@@ -685,8 +776,8 @@ public class UdonXML : UdonSharpBehaviour
      */
     public bool HasAttribute(object data, string attrName)
     {
-        var attr = (object[]) ((object[]) data)[1];
-        var tagNames = (string[]) attr[1];
+        var attr = (object[])((object[])data)[1];
+        var tagNames = (string[])attr[0];
 
         for (var i = 0; i != tagNames.Length; i++)
         {
@@ -704,9 +795,9 @@ public class UdonXML : UdonSharpBehaviour
      */
     public string GetAttribute(object data, string attrName)
     {
-        var attr = (object[]) ((object[]) data)[1];
-        var tagNames = (string[]) attr[1];
-        var tagValues = (string[]) attr[1];
+        var attr = (object[])((object[])data)[1];
+        var tagNames = (string[])attr[0];
+        var tagValues = (string[])attr[1];
 
         for (var i = 0; i != tagNames.Length; i++)
         {
@@ -726,9 +817,9 @@ public class UdonXML : UdonSharpBehaviour
      */
     public bool SetAttribute(object data, string attrName, string newValue)
     {
-        var attr = (object[]) ((object[]) data)[1];
-        var tagNames = (string[]) attr[1];
-        var tagValues = (string[]) attr[1];
+        var attr = (object[])((object[])data)[1];
+        var tagNames = (string[])attr[0];
+        var tagValues = (string[])attr[1];
 
         for (var i = 0; i != tagNames.Length; i++)
         {
@@ -752,9 +843,9 @@ public class UdonXML : UdonSharpBehaviour
      */
     public bool RemoveAttribute(object data, string attrName)
     {
-        var attr = (object[]) ((object[]) data)[1];
-        var tagNames = (string[]) attr[1];
-        var tagValues = (string[]) attr[1];
+        var attr = (object[])((object[])data)[1];
+        var tagNames = (string[])attr[0];
+        var tagValues = (string[])attr[1];
 
         for (var i = 0; i != tagNames.Length; i++)
         {
